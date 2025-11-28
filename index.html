@@ -120,14 +120,14 @@
 
       // Input
       const keys = new Set();
-      window.addEventListener('keydown', (e) => {
+      window.addEventListener('keydown', (e) => { console.log('[keydown]', e.code, e.key);
         if (e.code === 'ArrowLeft' || e.code === 'KeyA') { keys.add('left'); e.preventDefault(); }
         if (e.code === 'ArrowRight' || e.code === 'KeyD') { keys.add('right'); e.preventDefault(); }
         if (e.code === 'Space') { toggleStartPause(); e.preventDefault(); }
         if (e.code === 'KeyR') { resetGame(true); }
-        if (e.code === 'KeyB') { fireExtraBall(); }
+        if (e.code === 'KeyB' || (e.key && e.key.toLowerCase() === 'b')) { fireExtraBall(); e.preventDefault(); }
       });
-      window.addEventListener('keyup', (e) => {
+      window.addEventListener('keyup', (e) => { console.log('[keyup]', e.code, e.key);
         if (e.code === 'ArrowLeft' || e.code === 'KeyA') { keys.delete('left'); e.preventDefault(); }
         if (e.code === 'ArrowRight' || e.code === 'KeyD') { keys.delete('right'); e.preventDefault(); }
       });
@@ -150,19 +150,71 @@
       }
 
       function fireExtraBall() {
-        // Allow firing from ready/lifeLost to start the game
         if (state === 'ready' || state === 'lifeLost') state = 'running';
         if (state !== 'running') return;
-        const speed = Math.max(300, Math.hypot(ball.vx, ball.vy));
-        const angle = (-65 + Math.random() * 130) * Math.PI / 180;
         const bx = paddle.x + paddle.w / 2;
         const by = paddle.y - 18;
-        extraBalls.push({ r: 7, x: bx, y: by, vx: speed * Math.cos(angle), vy: -Math.abs(speed * Math.sin(angle)) });
+        // Aim at the nearest alive brick center; fallback is straight up
+        let tx = W / 2, ty = 0 + 10;
+        let best = Infinity;
+        for (const b of bricks) {
+          if (!b.alive) continue;
+          const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+          const d2 = (cx - bx) * (cx - bx) + (cy - by) * (cy - by);
+          if (d2 < best) { best = d2; tx = cx; ty = cy; }
+        }
+        const dx = tx - bx, dy = ty - by;
+        const len = Math.hypot(dx, dy) || 1;
+        const speed = 520;
+        extraBalls.push({ r: 7, x: bx, y: by, vx: speed * (dx / len), vy: speed * (dy / len) });
       }
 
       function update(dt) {
         if (state !== 'running') return;
         // Paddle movement by keys
+
+      function updateExtraBalls(dt) {
+        for (let i = extraBalls.length - 1; i >= 0; i--) {
+          const eb = extraBalls[i];
+          eb.x += eb.vx * dt; eb.y += eb.vy * dt;
+          if (eb.x - eb.r < 0) { eb.x = eb.r; eb.vx *= -1; }
+          if (eb.x + eb.r > W) { eb.x = W - eb.r; eb.vx *= -1; }
+          if (eb.y - eb.r < 0) { eb.y = eb.r; eb.vy *= -1; }
+          if (eb.y + eb.r >= paddle.y && eb.y - eb.r <= paddle.y + paddle.h && eb.x >= paddle.x && eb.x <= paddle.x + paddle.w && eb.vy > 0) {
+            eb.y = paddle.y - eb.r;
+            const hit = (eb.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+            const maxBounce = 70 * Math.PI / 180;
+            const angle = hit * maxBounce;
+            const speed = Math.hypot(eb.vx, eb.vy) * 1.01;
+            eb.vx = speed * Math.sin(angle);
+            eb.vy = -Math.abs(speed * Math.cos(angle));
+          }
+          for (const b of bricks) {
+            if (!b.alive) continue;
+            const nx = Math.max(b.x, Math.min(eb.x, b.x + b.w));
+            const ny = Math.max(b.y, Math.min(eb.y, b.y + b.h));
+            const dx = eb.x - nx, dy = eb.y - ny;
+            if (dx*dx + dy*dy <= eb.r * eb.r) {
+              const overlapLeft = Math.abs((eb.x + eb.r) - b.x);
+              const overlapRight = Math.abs((b.x + b.w) - (eb.x - eb.r));
+              const overlapTop = Math.abs((eb.y + eb.r) - b.y);
+              const overlapBottom = Math.abs((b.y + b.h) - (eb.y - eb.r));
+              const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+              if (minOverlap === overlapLeft) { eb.vx = -Math.abs(eb.vx); eb.x = b.x - eb.r; }
+              else if (minOverlap === overlapRight) { eb.vx = Math.abs(eb.vx); eb.x = b.x + b.w + eb.r; }
+              else if (minOverlap === overlapTop) { eb.vy = -Math.abs(eb.vy); eb.y = b.y - eb.r; }
+              else { eb.vy = Math.abs(eb.vy); eb.y = b.y + b.h + eb.r; }
+              b.hp -= 1; if (b.hp <= 0) { b.alive = false; score += 10; }
+              const sp = Math.hypot(eb.vx, eb.vy) * 1.005;
+              const ang = Math.atan2(eb.vy, eb.vx);
+              eb.vx = sp * Math.cos(ang); eb.vy = sp * Math.sin(ang);
+              break;
+            }
+          }
+          if (eb.y - eb.r > H) { state = 'gameover'; break; }
+        }
+      }
+
         let dir = 0; if (keys.has('left')) dir -= 1; if (keys.has('right')) dir += 1;
         paddle.x += dir * paddle.speed * dt;
         paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
@@ -257,15 +309,6 @@
             state = 'gameover';
             break;
 
-        // Draw extra balls
-        for (const eb of extraBalls) {
-          const bx = lx(eb.x), by = ly(eb.y), br = (lx(eb.r) + ly(eb.r)) / 2;
-          const bg = ctx.createRadialGradient(bx - br/3, by - br/3, br/4, bx, by, br);
-          bg.addColorStop(0, '#ffeec2'); bg.addColorStop(1, '#ffcc66');
-          ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
-          ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
-        }
-
           }
         }
 
@@ -274,7 +317,8 @@
             break; // handle one brick per frame for stability
           }
         }
-        if (aliveCount === 0) { state = 'win'; }
+        updateExtraBalls(dt);
+        if (!bricks.some(b => b.alive)) { state = 'win'; }
 
         // Miss (bottom out)
         if (ball.y - ball.r > H) {
@@ -321,6 +365,15 @@
         bg.addColorStop(0, '#ffffff'); bg.addColorStop(1, '#c2d0ff');
         ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
+
+        // Draw extra balls
+        for (const eb of extraBalls) {
+          const ex = lx(eb.x), ey = ly(eb.y), er = (lx(eb.r) + ly(eb.r)) / 2;
+          const eg = ctx.createRadialGradient(ex - er/3, ey - er/3, er/4, ex, ey, er);
+          eg.addColorStop(0, '#ffeec2'); eg.addColorStop(1, '#ffcc66');
+          ctx.fillStyle = eg; ctx.beginPath(); ctx.arc(ex, ey, er, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
+        }
 
         // HUD
         ctx.fillStyle = 'rgba(255,255,255,.9)';

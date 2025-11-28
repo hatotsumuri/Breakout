@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ブロック崩し</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0; display: grid; place-items: center; min-height: 100svh;
+      background: radial-gradient(1200px 800px at 50% -10%, #2a2a36, #0d0d12);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, sans-serif;
+    }
+    #wrap { text-align: center; }
+    canvas {
+      width: min(92vw, 800px);
+      aspect-ratio: 4/3;
+      max-height: 92vh;
+      background: #0b0f1a;
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.06);
+      cursor: pointer;
+    }
+    .hud { margin-top: .6rem; opacity: .85; font-size: 14px; }
+    .kbd { padding: 2px 6px; border: 1px solid #8885; border-bottom-width: 3px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="game" width="800" height="600" aria-label="Breakout"></canvas>
+    <div class="hud">操作: <span class="kbd">←</span><span class="kbd">→</span> または マウス/タッチ | 開始/一時停止: <span class="kbd">Space</span> | 弾追加: <span class="kbd">B</span></div>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+
+      // Device pixel ratio scaling for crisp graphics
+      function resizeForDPR() {
+        const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        const cssW = canvas.clientWidth || 800;
+        const cssH = canvas.clientHeight || 600;
+        canvas.width = Math.round(cssW * dpr);
+        canvas.height = Math.round(cssH * dpr);
+        scale = dpr;
+      }
+
+      let scale = 1; // drawing scale from DPR
+      resizeForDPR();
+      window.addEventListener('resize', resizeForDPR);
+
+      // Game constants (in logical units; scaled when drawing)
+      const W = 800, H = 600; // logical design size used for layout
+
+      // Convert logical -> screen
+      const lx = v => v * (canvas.width / W);
+      const ly = v => v * (canvas.height / H);
+
+      // Paddle
+      const paddle = {
+        w: 110, h: 14, x: (W - 110) / 2, y: H - 40, speed: 520, move: 0
+      };
+
+      // Ball
+      const ball = {
+        r: 8, x: W / 2, y: H / 2, vx: 280, vy: -280, speed: 380
+      };
+
+      // Extra balls fired by player (B key)
+      const extraBalls = [];
+
+      // Bricks
+      const BRICK_COLS = 10;
+      const BRICK_ROWS = 6;
+      const BRICK_PAD = 8;
+      const BRICK_TOP = 70;
+      const BRICK_SIDE = 20;
+      const BRICK_H = 22;
+      const BRICK_W = (W - BRICK_SIDE * 2 - BRICK_PAD * (BRICK_COLS - 1)) / BRICK_COLS;
+      let bricks = [];
+
+      let score = 0;
+      let lives = 3;
+      let state = 'ready'; // ready | running | paused | lifeLost | win | gameover
+      let lastTime = 0;
+
+      function resetBricks() {
+        bricks = [];
+        for (let r = 0; r < BRICK_ROWS; r++) {
+          for (let c = 0; c < BRICK_COLS; c++) {
+            const x = BRICK_SIDE + c * (BRICK_W + BRICK_PAD);
+            const y = BRICK_TOP + r * (BRICK_H + BRICK_PAD);
+            const hp = r < 2 ? 1 : r < 4 ? 1 : 1; // can tweak for multi-hit
+            bricks.push({ x, y, w: BRICK_W, h: BRICK_H, alive: true, hp, row: r });
+          }
+        }
+      }
+
+      function newBallOnPaddle() {
+        ball.x = paddle.x + paddle.w / 2;
+        ball.y = paddle.y - 16;
+        const angle = (-60 + Math.random() * 120) * Math.PI / 180;
+        const speed = ball.speed;
+        ball.vx = speed * Math.cos(angle);
+        ball.vy = -Math.abs(speed * Math.sin(angle));
+      }
+
+      function resetGame(full = true) {
+        if (full) {
+          score = 0; lives = 3; resetBricks();
+        }
+        extraBalls.length = 0;
+        paddle.x = (W - paddle.w) / 2; paddle.move = 0;
+        newBallOnPaddle();
+        state = 'ready';
+      }
+
+      resetGame(true);
+
+      // Input
+      const keys = new Set();
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'ArrowLeft' || e.code === 'KeyA') { keys.add('left'); e.preventDefault(); }
+        if (e.code === 'ArrowRight' || e.code === 'KeyD') { keys.add('right'); e.preventDefault(); }
+        if (e.code === 'Space') { toggleStartPause(); e.preventDefault(); }
+        if (e.code === 'KeyR') { resetGame(true); }
+        if (e.code === 'KeyB') { fireExtraBall(); }
+      });
+      window.addEventListener('keyup', (e) => {
+        if (e.code === 'ArrowLeft' || e.code === 'KeyA') { keys.delete('left'); e.preventDefault(); }
+        if (e.code === 'ArrowRight' || e.code === 'KeyD') { keys.delete('right'); e.preventDefault(); }
+      });
+
+      // Mouse / touch control
+      function setPaddleByPointer(clientX) {
+        const rect = canvas.getBoundingClientRect();
+        const x = (clientX - rect.left) * (W / rect.width);
+        paddle.x = Math.max(0, Math.min(W - paddle.w, x - paddle.w / 2));
+      }
+      canvas.addEventListener('mousemove', (e) => setPaddleByPointer(e.clientX));
+      canvas.addEventListener('touchmove', (e) => { if (e.touches[0]) setPaddleByPointer(e.touches[0].clientX); }, { passive: true });
+      canvas.addEventListener('click', () => toggleStartPause());
+
+      function toggleStartPause() {
+        if (state === 'ready' || state === 'lifeLost') { state = 'running'; return; }
+        if (state === 'running') { state = 'paused'; return; }
+        if (state === 'paused') { state = 'running'; return; }
+        if (state === 'gameover' || state === 'win') { resetGame(true); state = 'running'; return; }
+      }
+
+      function fireExtraBall() {
+        // Allow firing from ready/lifeLost to start the game
+        if (state === 'ready' || state === 'lifeLost') state = 'running';
+        if (state !== 'running') return;
+        const speed = Math.max(300, Math.hypot(ball.vx, ball.vy));
+        const angle = (-65 + Math.random() * 130) * Math.PI / 180;
+        const bx = paddle.x + paddle.w / 2;
+        const by = paddle.y - 18;
+        extraBalls.push({ r: 7, x: bx, y: by, vx: speed * Math.cos(angle), vy: -Math.abs(speed * Math.sin(angle)) });
+      }
+
+      function update(dt) {
+        if (state !== 'running') return;
+        // Paddle movement by keys
+        let dir = 0; if (keys.has('left')) dir -= 1; if (keys.has('right')) dir += 1;
+        paddle.x += dir * paddle.speed * dt;
+        paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
+
+        // Ball physics
+        ball.x += ball.vx * dt; ball.y += ball.vy * dt;
+
+        // Walls
+        if (ball.x - ball.r < 0) { ball.x = ball.r; ball.vx *= -1; }
+        if (ball.x + ball.r > W) { ball.x = W - ball.r; ball.vx *= -1; }
+        if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy *= -1; }
+
+        // Paddle collision (AABB-circle simple)
+        if (ball.y + ball.r >= paddle.y && ball.y - ball.r <= paddle.y + paddle.h && ball.x >= paddle.x && ball.x <= paddle.x + paddle.w && ball.vy > 0) {
+          ball.y = paddle.y - ball.r;
+          // reflect with angle based on hit position
+          const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2); // -1..1
+          const maxBounce = 70 * Math.PI / 180;
+          const angle = hit * maxBounce;
+          const speed = Math.hypot(ball.vx, ball.vy) * 1.01; // slight acceleration
+          ball.vx = speed * Math.sin(angle);
+          ball.vy = -Math.abs(speed * Math.cos(angle));
+        }
+
+        // Brick collisions (iterate and resolve)
+        let aliveCount = 0;
+        for (const b of bricks) {
+          if (!b.alive) continue; aliveCount++;
+          // Circle-rect collision
+          const nx = Math.max(b.x, Math.min(ball.x, b.x + b.w));
+          const ny = Math.max(b.y, Math.min(ball.y, b.y + b.h));
+          const dx = ball.x - nx, dy = ball.y - ny;
+          if (dx*dx + dy*dy <= ball.r * ball.r) {
+            // Determine collision side by penetration
+            const overlapLeft = Math.abs((ball.x + ball.r) - b.x);
+            const overlapRight = Math.abs((b.x + b.w) - (ball.x - ball.r));
+            const overlapTop = Math.abs((ball.y + ball.r) - b.y);
+            const overlapBottom = Math.abs((b.y + b.h) - (ball.y - ball.r));
+            const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+            if (minOverlap === overlapLeft) { ball.vx = -Math.abs(ball.vx); ball.x = b.x - ball.r; }
+            else if (minOverlap === overlapRight) { ball.vx = Math.abs(ball.vx); ball.x = b.x + b.w + ball.r; }
+            else if (minOverlap === overlapTop) { ball.vy = -Math.abs(ball.vy); ball.y = b.y - ball.r; }
+            else { ball.vy = Math.abs(ball.vy); ball.y = b.y + b.h + ball.r; }
+
+            b.hp -= 1; if (b.hp <= 0) { b.alive = false; score += 10; }
+            // Slight speed up each hit
+            const sp = Math.hypot(ball.vx, ball.vy) * 1.005;
+
+        // Extra balls physics
+        for (let i = extraBalls.length - 1; i >= 0; i--) {
+          const eb = extraBalls[i];
+          eb.x += eb.vx * dt; eb.y += eb.vy * dt;
+          // walls
+          if (eb.x - eb.r < 0) { eb.x = eb.r; eb.vx *= -1; }
+          if (eb.x + eb.r > W) { eb.x = W - eb.r; eb.vx *= -1; }
+          if (eb.y - eb.r < 0) { eb.y = eb.r; eb.vy *= -1; }
+          // paddle
+          if (eb.y + eb.r >= paddle.y && eb.y - eb.r <= paddle.y + paddle.h && eb.x >= paddle.x && eb.x <= paddle.x + paddle.w && eb.vy > 0) {
+            eb.y = paddle.y - eb.r;
+            const hit = (eb.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+            const maxBounce = 70 * Math.PI / 180;
+            const angle = hit * maxBounce;
+            const speed = Math.hypot(eb.vx, eb.vy) * 1.01;
+            eb.vx = speed * Math.sin(angle);
+            eb.vy = -Math.abs(speed * Math.cos(angle));
+          }
+          // bricks
+          for (const b of bricks) {
+            if (!b.alive) continue;
+            const nx = Math.max(b.x, Math.min(eb.x, b.x + b.w));
+            const ny = Math.max(b.y, Math.min(eb.y, b.y + b.h));
+            const dx = eb.x - nx, dy = eb.y - ny;
+            if (dx*dx + dy*dy <= eb.r * eb.r) {
+              const overlapLeft = Math.abs((eb.x + eb.r) - b.x);
+              const overlapRight = Math.abs((b.x + b.w) - (eb.x - eb.r));
+              const overlapTop = Math.abs((eb.y + eb.r) - b.y);
+              const overlapBottom = Math.abs((b.y + b.h) - (eb.y - eb.r));
+              const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+              if (minOverlap === overlapLeft) { eb.vx = -Math.abs(eb.vx); eb.x = b.x - eb.r; }
+              else if (minOverlap === overlapRight) { eb.vx = Math.abs(eb.vx); eb.x = b.x + b.w + eb.r; }
+              else if (minOverlap === overlapTop) { eb.vy = -Math.abs(eb.vy); eb.y = b.y - eb.r; }
+              else { eb.vy = Math.abs(eb.vy); eb.y = b.y + b.h + eb.r; }
+              b.hp -= 1; if (b.hp <= 0) { b.alive = false; score += 10; }
+              const sp = Math.hypot(eb.vx, eb.vy) * 1.005;
+              const ang = Math.atan2(eb.vy, eb.vx);
+              eb.vx = sp * Math.cos(ang); eb.vy = sp * Math.sin(ang);
+              break;
+            }
+          }
+          // bottom out -> game over
+          if (eb.y - eb.r > H) {
+            state = 'gameover';
+            break;
+
+        // Draw extra balls
+        for (const eb of extraBalls) {
+          const bx = lx(eb.x), by = ly(eb.y), br = (lx(eb.r) + ly(eb.r)) / 2;
+          const bg = ctx.createRadialGradient(bx - br/3, by - br/3, br/4, bx, by, br);
+          bg.addColorStop(0, '#ffeec2'); bg.addColorStop(1, '#ffcc66');
+          ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
+        }
+
+          }
+        }
+
+            const ang = Math.atan2(ball.vy, ball.vx);
+            ball.vx = sp * Math.cos(ang); ball.vy = sp * Math.sin(ang);
+            break; // handle one brick per frame for stability
+          }
+        }
+        if (aliveCount === 0) { state = 'win'; }
+
+        // Miss (bottom out)
+        if (ball.y - ball.r > H) {
+          lives -= 1;
+          if (lives <= 0) { state = 'gameover'; }
+          else { state = 'lifeLost'; newBallOnPaddle(); }
+        }
+      }
+
+      // Rendering
+      function draw() {
+        // Clear
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Background gradient
+        const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        g.addColorStop(0, '#0b1224');
+        g.addColorStop(1, '#090d18');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw bricks
+        for (const b of bricks) {
+          if (!b.alive) continue;
+          const hue = 210 + (b.row * 12);
+          ctx.fillStyle = `hsl(${hue} 70% 55%)`;
+          ctx.strokeStyle = 'rgba(255,255,255,.12)';
+          ctx.lineWidth = lx(1);
+          ctx.beginPath();
+          ctx.roundRect(lx(b.x), ly(b.y), lx(b.w), ly(b.h), lx(4));
+          ctx.fill(); ctx.stroke();
+        }
+
+        // Draw paddle
+        const padGrad = ctx.createLinearGradient(0, ly(paddle.y), 0, ly(paddle.y + paddle.h));
+        padGrad.addColorStop(0, '#c9d6ff');
+        padGrad.addColorStop(1, '#8aa2ff');
+        ctx.fillStyle = padGrad;
+        ctx.beginPath();
+        ctx.roundRect(lx(paddle.x), ly(paddle.y), lx(paddle.w), ly(paddle.h), lx(6));
+        ctx.fill();
+
+        // Draw ball
+        const bx = lx(ball.x), by = ly(ball.y), br = (lx(ball.r) + ly(ball.r)) / 2;
+        const bg = ctx.createRadialGradient(bx - br/3, by - br/3, br/4, bx, by, br);
+        bg.addColorStop(0, '#ffffff'); bg.addColorStop(1, '#c2d0ff');
+        ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
+
+        // HUD
+        ctx.fillStyle = 'rgba(255,255,255,.9)';
+        ctx.font = `${Math.round(lx(18))}px system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, sans-serif`;
+        ctx.textBaseline = 'top';
+        ctx.fillText(`SCORE: ${score}`, lx(16), ly(12));
+        ctx.fillText(`LIVES: ${lives}`, lx(W - 120), ly(12));
+
+        // Overlays
+        if (state === 'ready' || state === 'paused' || state === 'lifeLost' || state === 'gameover' || state === 'win') {
+          ctx.fillStyle = 'rgba(0,0,0,.45)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillStyle = 'white';
+          ctx.font = `${Math.round(lx(36))}px system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, sans-serif`;
+          let title = '';
+          if (state === 'ready') title = 'クリック or Space で開始';
+          if (state === 'paused') title = '一時停止';
+          if (state === 'lifeLost') title = 'ボール準備 OK';
+          if (state === 'gameover') title = 'ゲームオーバー';
+          if (state === 'win') title = 'クリア！';
+          ctx.fillText(title, canvas.width/2, canvas.height/2 - ly(10));
+          ctx.font = `${Math.round(lx(18))}px system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, sans-serif`;
+          const sub = (state === 'paused') ? 'Spaceで再開 / Rでリセット'
+                    : (state === 'gameover' || state === 'win') ? 'Spaceまたはクリックでリスタート'
+                    : 'Spaceで開始/再開';
+          ctx.fillText(sub, canvas.width/2, canvas.height/2 + ly(24));
+        }
+      }
+
+      function loop(t) {
+        const dt = Math.min(0.033, (t - lastTime) / 1000 || 0);
+        lastTime = t;
+        update(dt);
+        draw();
+        requestAnimationFrame(loop);
+      }
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>

@@ -211,7 +211,7 @@
               break;
             }
           }
-          if (eb.y - eb.r > H) { state = 'gameover'; break; }
+          if (eb.y - eb.r > H) { extraBalls.splice(i, 1); continue; }
         }
       }
 
@@ -304,11 +304,10 @@
               break;
             }
           }
-          // bottom out -> game over
+          // bottom out -> remove extra ball (does not cause game over)
           if (eb.y - eb.r > H) {
-            state = 'gameover';
-            break;
-
+            extraBalls.splice(i, 1);
+            continue;
           }
         }
 

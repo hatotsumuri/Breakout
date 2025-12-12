@@ -69,6 +69,8 @@
 
       // Extra balls fired by player (B key)
       const extraBalls = [];
+      // Piercing balls fired by player (V key)
+      const piercingBalls = [];
 
       // Bricks
       const BRICK_COLS = 10;
@@ -134,6 +136,7 @@
         if (e.code === 'Space') { toggleStartPause(); e.preventDefault(); }
         if (e.code === 'KeyR') { resetGame(true); }
         if (e.code === 'KeyB' || (e.key && e.key.toLowerCase() === 'b')) { fireExtraBall(); e.preventDefault(); }
+        if (e.code === 'KeyV' || (e.key && e.key.toLowerCase() === 'v')) { firePiercingBall(); e.preventDefault(); }
       });
       window.addEventListener('keyup', (e) => { console.log('[keyup]', e.code, e.key);
         if (e.code === 'ArrowLeft' || e.code === 'KeyA') { keys.delete('left'); e.preventDefault(); }
@@ -175,6 +178,15 @@
         const len = Math.hypot(dx, dy) || 1;
         const speed = 520;
         extraBalls.push({ r: 7, x: bx, y: by, vx: speed * (dx / len), vy: speed * (dy / len) });
+      }
+
+      function firePiercingBall() {
+        if (state === 'ready' || state === 'lifeLost') state = 'running';
+        if (state !== 'running') return;
+        const bx = paddle.x + paddle.w / 2;
+        const by = paddle.y - 18;
+        const speed = 620;
+        piercingBalls.push({ r: 6, x: bx, y: by, vx: 0, vy: -speed });
       }
 
       function update(dt) {
@@ -333,14 +345,64 @@
           }
         }
         updateExtraBalls(dt);
+        updatePiercingBalls(dt);
         if (!bricks.some(b => b.alive)) { state = 'win'; }
 
-        // Miss (bottom out)
+        // Miss (bottom out) - main ball also causes instant game over
         if (ball.y - ball.r > H) {
-          applyDamage(1);
-          if (state === 'gameover') return;
-          state = 'lifeLost';
-          newBallOnPaddle();
+          applyDamage(lives);
+          state = 'gameover';
+        }
+      }
+
+      function updatePiercingBalls(dt) {
+        for (let i = piercingBalls.length - 1; i >= 0; i--) {
+          const pb = piercingBalls[i];
+          pb.x += pb.vx * dt;
+          pb.y += pb.vy * dt;
+
+          // walls (left/right)
+          if (pb.x - pb.r < 0) { pb.x = pb.r; pb.vx *= -1; }
+          if (pb.x + pb.r > W) { pb.x = W - pb.r; pb.vx *= -1; }
+          // ceiling
+          if (pb.y - pb.r < 0) { pb.y = pb.r; pb.vy *= -1; }
+
+          // paddle: reflect with angle like normal ball
+          if (
+            pb.y + pb.r >= paddle.y &&
+            pb.y - pb.r <= paddle.y + paddle.h &&
+            pb.x >= paddle.x &&
+            pb.x <= paddle.x + paddle.w &&
+            pb.vy > 0
+          ) {
+            pb.y = paddle.y - pb.r;
+            const hit = (pb.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2); // -1..1
+            const maxBounce = 70 * Math.PI / 180;
+            const angle = hit * maxBounce;
+            const speed = Math.hypot(pb.vx, pb.vy);
+            pb.vx = speed * Math.sin(angle);
+            pb.vy = -Math.abs(speed * Math.cos(angle));
+          }
+
+          // bricks: destroy and pierce (no reflection)
+          for (const b of bricks) {
+            if (!b.alive) continue;
+            const nx = Math.max(b.x, Math.min(pb.x, b.x + b.w));
+            const ny = Math.max(b.y, Math.min(pb.y, b.y + b.h));
+            const dx = pb.x - nx, dy = pb.y - ny;
+            if (dx*dx + dy*dy <= pb.r * pb.r) {
+              b.hp -= 1;
+              if (b.hp <= 0) { b.alive = false; score += 10; }
+              // 弾はそのまま進み続ける（貫通）
+            }
+          }
+
+          // bottom out -> force game over
+          if (pb.y - pb.r > H) {
+            applyDamage(lives);
+            state = 'gameover';
+            break;
+          }
         }
       }
 
@@ -388,6 +450,16 @@
           const eg = ctx.createRadialGradient(ex - er/3, ey - er/3, er/4, ex, ey, er);
           eg.addColorStop(0, '#ffeec2'); eg.addColorStop(1, '#ffcc66');
           ctx.fillStyle = eg; ctx.beginPath(); ctx.arc(ex, ey, er, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
+        }
+
+        // Draw piercing balls
+        for (const pb of piercingBalls) {
+          const px = lx(pb.x), py = ly(pb.y), pr = (lx(pb.r) + ly(pb.r)) / 2;
+          const pg = ctx.createRadialGradient(px - pr/3, py - pr/3, pr/4, px, py, pr);
+          pg.addColorStop(0, '#a0ffea');
+          pg.addColorStop(1, '#26c6da');
+          ctx.fillStyle = pg; ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
           ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
         }
 

@@ -144,6 +144,7 @@
         if (e.code === 'KeyR') { resetGame(true); }
         if (e.code === 'KeyB' || (e.key && e.key.toLowerCase() === 'b')) { fireExtraBall(); e.preventDefault(); }
         if (e.code === 'KeyV' || (e.key && e.key.toLowerCase() === 'v')) { firePiercingBall(); e.preventDefault(); }
+        if (e.code === 'KeyN' || (e.key && e.key.toLowerCase() === 'n')) { reverseNonEnemyProjectiles(); e.preventDefault(); }
       });
       window.addEventListener('keyup', (e) => { console.log('[keyup]', e.code, e.key);
         if (e.code === 'ArrowLeft' || e.code === 'KeyA') { keys.delete('left'); e.preventDefault(); }
@@ -194,6 +195,24 @@
         const by = paddle.y - 18;
         const speed = 620;
         piercingBalls.push({ r: 6, x: bx, y: by, vx: 0, vy: -speed });
+      }
+
+      function reverseNonEnemyProjectiles() {
+        // main ball
+        ball.vx = -ball.vx;
+        ball.vy = -ball.vy;
+
+        // extra balls (B key)
+        for (const eb of extraBalls) {
+          eb.vx = -eb.vx;
+          eb.vy = -eb.vy;
+        }
+
+        // piercing balls (V key)
+        for (const pb of piercingBalls) {
+          pb.vx = -pb.vx;
+          pb.vy = -pb.vy;
+        }
       }
 
       function update(dt) {

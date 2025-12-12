@@ -71,6 +71,8 @@
       const extraBalls = [];
       // Piercing balls fired by player (V key)
       const piercingBalls = [];
+      // Enemy bullets fired from front brick row
+      const enemyBullets = [];
 
       // Bricks
       const BRICK_COLS = 10;
@@ -87,6 +89,7 @@
       let lives = MAX_LIVES;
       let state = 'ready'; // ready | running | paused | lifeLost | win | gameover
       let lastTime = 0;
+      let enemyShootCooldownPerCol = new Array(BRICK_COLS).fill(0);
 
       function applyDamage(amount) {
         lives -= amount;
@@ -102,7 +105,7 @@
             const x = BRICK_SIDE + c * (BRICK_W + BRICK_PAD);
             const y = BRICK_TOP + r * (BRICK_H + BRICK_PAD);
             const hp = r < 2 ? 1 : r < 4 ? 1 : 1; // can tweak for multi-hit
-            bricks.push({ x, y, w: BRICK_W, h: BRICK_H, alive: true, hp, row: r });
+            bricks.push({ x, y, w: BRICK_W, h: BRICK_H, alive: true, hp, row: r, col: c });
           }
         }
       }
@@ -119,6 +122,10 @@
       function resetGame(full = true) {
         if (full) {
           score = 0; lives = MAX_LIVES; resetBricks();
+          // 敵弾の列ごとの初期待ち時間をランダムに設定して一斉射撃を防ぐ
+          enemyShootCooldownPerCol = enemyShootCooldownPerCol.map(
+            () => 1.5 + Math.random() * 1.5
+          );
         }
         extraBalls.length = 0;
         paddle.x = (W - paddle.w) / 2; paddle.move = 0;
@@ -346,12 +353,54 @@
         }
         updateExtraBalls(dt);
         updatePiercingBalls(dt);
+        maybeSpawnEnemyBullet(dt);
+        updateEnemyBullets(dt);
         if (!bricks.some(b => b.alive)) { state = 'win'; }
 
         // Miss (bottom out) - main ball also causes instant game over
         if (ball.y - ball.r > H) {
           applyDamage(lives);
           state = 'gameover';
+        }
+      }
+
+      function maybeSpawnEnemyBullet(dt) {
+        const baseInterval = 1.5;
+        const randomJitter = 1.5;
+
+        // 最前列（プレーヤーに最も近い row）を探す
+        let frontRow = -1;
+        for (const b of bricks) {
+          if (!b.alive) continue;
+          if (b.row > frontRow) frontRow = b.row;
+        }
+        if (frontRow < 0 || state !== 'running') return;
+
+        // 最前列の各列ごとに代表ブロックを選ぶ
+        const frontByCol = new Array(BRICK_COLS).fill(null);
+        for (const b of bricks) {
+          if (!b.alive || b.row !== frontRow) continue;
+          const col = b.col;
+          if (!frontByCol[col] || b.y > frontByCol[col].y) {
+            frontByCol[col] = b;
+          }
+        }
+
+        for (let col = 0; col < BRICK_COLS; col++) {
+          const src = frontByCol[col];
+          if (!src) continue;
+
+          enemyShootCooldownPerCol[col] -= dt;
+          if (enemyShootCooldownPerCol[col] > 0) continue;
+
+          const bx = src.x + src.w / 2;
+          const by = src.y + src.h;
+          const speed = 260;
+          const bulletW = 8;
+          const bulletH = 22;
+          enemyBullets.push({ x: bx - bulletW / 2, y: by, w: bulletW, h: bulletH, vy: speed });
+
+          enemyShootCooldownPerCol[col] = baseInterval + Math.random() * randomJitter;
         }
       }
 
@@ -406,6 +455,31 @@
         }
       }
 
+      function updateEnemyBullets(dt) {
+        for (let i = enemyBullets.length - 1; i >= 0; i--) {
+          const eb = enemyBullets[i];
+          eb.y += eb.vy * dt;
+
+          // Hit paddle -> heavy damage (AABB)
+          if (
+            eb.y + eb.h >= paddle.y &&
+            eb.y <= paddle.y + paddle.h &&
+            eb.x + eb.w >= paddle.x &&
+            eb.x <= paddle.x + paddle.w
+          ) {
+            applyDamage(10);
+            enemyBullets.splice(i, 1);
+            if (state === 'gameover') break;
+            continue;
+          }
+
+          // Off-screen bottom -> remove
+          if (eb.y > H) {
+            enemyBullets.splice(i, 1);
+          }
+        }
+      }
+
       // Rendering
       function draw() {
         // Clear
@@ -451,6 +525,17 @@
           eg.addColorStop(0, '#ffeec2'); eg.addColorStop(1, '#ffcc66');
           ctx.fillStyle = eg; ctx.beginPath(); ctx.arc(ex, ey, er, 0, Math.PI * 2); ctx.fill();
           ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.stroke();
+        }
+
+        // Draw enemy bullets (red rectangles)
+        for (const b of enemyBullets) {
+          const x = lx(b.x), y = ly(b.y);
+          const w = lx(b.w), h = ly(b.h);
+          const g = ctx.createLinearGradient(x, y, x, y + h);
+          g.addColorStop(0, '#ffebee');
+          g.addColorStop(1, '#e53935');
+          ctx.fillStyle = g;
+          ctx.fillRect(x, y, w, h);
         }
 
         // Draw piercing balls

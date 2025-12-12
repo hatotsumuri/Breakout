@@ -58,8 +58,10 @@
       const ly = v => v * (canvas.height / H);
 
       // Paddle
+      const PADDLE_WIDTH_NORMAL = 110;
+      const PADDLE_WIDTH_DODGE = 60; // Mキー押下中の回避用の短い幅
       const paddle = {
-        w: 110, h: 14, x: (W - 110) / 2, y: H - 40, speed: 520, move: 0
+        w: PADDLE_WIDTH_NORMAL, h: 14, x: (W - PADDLE_WIDTH_NORMAL) / 2, y: H - 40, speed: 520, move: 0
       };
 
       // Ball
@@ -145,10 +147,30 @@
         if (e.code === 'KeyB' || (e.key && e.key.toLowerCase() === 'b')) { fireExtraBall(); e.preventDefault(); }
         if (e.code === 'KeyV' || (e.key && e.key.toLowerCase() === 'v')) { firePiercingBall(); e.preventDefault(); }
         if (e.code === 'KeyN' || (e.key && e.key.toLowerCase() === 'n')) { reverseNonEnemyProjectiles(); e.preventDefault(); }
+        if (e.code === 'KeyM' || (e.key && e.key.toLowerCase() === 'm')) {
+          // パドル中心を維持したまま幅を短くする
+          if (paddle.w !== PADDLE_WIDTH_DODGE) {
+            const cx = paddle.x + paddle.w / 2;
+            paddle.w = PADDLE_WIDTH_DODGE;
+            paddle.x = cx - paddle.w / 2;
+            paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
+          }
+          e.preventDefault();
+        }
       });
       window.addEventListener('keyup', (e) => { console.log('[keyup]', e.code, e.key);
         if (e.code === 'ArrowLeft' || e.code === 'KeyA') { keys.delete('left'); e.preventDefault(); }
         if (e.code === 'ArrowRight' || e.code === 'KeyD') { keys.delete('right'); e.preventDefault(); }
+        if (e.code === 'KeyM' || (e.key && e.key.toLowerCase() === 'm')) {
+          // 幅を元に戻す（中心を維持）
+          if (paddle.w !== PADDLE_WIDTH_NORMAL) {
+            const cx = paddle.x + paddle.w / 2;
+            paddle.w = PADDLE_WIDTH_NORMAL;
+            paddle.x = cx - paddle.w / 2;
+            paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
+          }
+          e.preventDefault();
+        }
       });
 
       // Mouse / touch control

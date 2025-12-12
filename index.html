@@ -81,9 +81,17 @@
       let bricks = [];
 
       let score = 0;
-      let lives = 3;
+      const MAX_LIVES = 100;
+      let lives = MAX_LIVES;
       let state = 'ready'; // ready | running | paused | lifeLost | win | gameover
       let lastTime = 0;
+
+      function applyDamage(amount) {
+        lives -= amount;
+        if (lives <= 0) {
+          state = 'gameover';
+        }
+      }
 
       function resetBricks() {
         bricks = [];
@@ -108,7 +116,7 @@
 
       function resetGame(full = true) {
         if (full) {
-          score = 0; lives = 3; resetBricks();
+          score = 0; lives = MAX_LIVES; resetBricks();
         }
         extraBalls.length = 0;
         paddle.x = (W - paddle.w) / 2; paddle.move = 0;
@@ -211,7 +219,14 @@
               break;
             }
           }
-          if (eb.y - eb.r > H) { state = 'gameover'; break; }
+          if (eb.y - eb.r > H) {
+            applyDamage(1);
+            if (state === 'gameover') {
+              break;
+            }
+            extraBalls.splice(i, 1);
+            continue;
+          }
         }
       }
 
@@ -322,9 +337,10 @@
 
         // Miss (bottom out)
         if (ball.y - ball.r > H) {
-          lives -= 1;
-          if (lives <= 0) { state = 'gameover'; }
-          else { state = 'lifeLost'; newBallOnPaddle(); }
+          applyDamage(1);
+          if (state === 'gameover') return;
+          state = 'lifeLost';
+          newBallOnPaddle();
         }
       }
 
@@ -381,6 +397,7 @@
         ctx.textBaseline = 'top';
         ctx.fillText(`SCORE: ${score}`, lx(16), ly(12));
         ctx.fillText(`LIVES: ${lives}`, lx(W - 120), ly(12));
+        ctx.fillText(`HITS: ${MAX_LIVES - lives}`, lx(W / 2 - 60), ly(12));
 
         // Overlays
         if (state === 'ready' || state === 'paused' || state === 'lifeLost' || state === 'gameover' || state === 'win') {
